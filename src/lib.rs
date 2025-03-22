@@ -1,4 +1,3 @@
-#![allow(unused)]
 //! This is a goofy little project to learn about displaying data from assetto corsa.
 //! reference for data: https://docs.google.com/document/d/1KfkZiIluXZ6mMhLWfDX1qAGbvhGRC3ZUzjVIt5FQpp4/pub
 //! also referrence: https://github.com/rickwest/ac-remote-telemetry-client/blob/master/src/parsers/RTCarInfoParser.js
@@ -8,93 +7,49 @@
 //! bool are 8 bit boolean value
 
 mod parser;
-use std::{
-    fs::File,
-    io::{BufRead, BufReader, ErrorKind, Read},
-    net::{Ipv4Addr, SocketAddr},
-    str::FromStr,
-    time::Duration,
-};
 
-use anyhow::bail;
-use bytes::{BufMut, Bytes, BytesMut};
-use parser::{Device, Handshake, MessageKind, Operation};
-use tokio::{
-    net::{ToSocketAddrs, UdpSocket},
-    time::sleep,
-};
+use parser::{Device, Event, Operation, build_udp_message};
+use tokio::net::{ToSocketAddrs, UdpSocket};
 
 const AC_VERSION: i32 = 1;
 
-pub struct AcClient {
+/// A Client connects to the remote Assetto Corsa UDP server,
+/// allowing the user to receive UDP telemetry updates about the current session.
+///
+/// * `device`: what kind of device is this client running on
+/// * `socket`: the socket for the client to run on.
+pub struct Client {
+    device: Device,
     socket: UdpSocket,
 }
 
-impl AcClient {
-    pub async fn new<A>(remote_addr: A) -> anyhow::Result<Self>
+impl Client {
+    pub async fn new<A>(remote_addr: A, device: Device) -> anyhow::Result<Self>
     where
         A: ToSocketAddrs,
     {
         // NOTE: this needs to be chosen by the OS, or else it will never pick up.
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
         socket.connect(remote_addr).await?;
-        Ok(Self { socket })
+        Ok(Self { socket, device })
     }
-}
 
-// #[tokio::main]
-// async fn main() -> anyhow::Result<()> {
-//     // build our socket.
-//     let remote_addr = SocketAddr::from(([192, 168, 0, 135], 9996));
-//     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-//     socket.connect(remote_addr).await?;
-//
-//     // next send handshake
-//     let handshake_msg = build_msg(Operation::Handshake, Device::IPhone);
-//     socket.send(&handshake_msg).await?;
-//
-//     loop {
-//         // guards our loop from just spinning hard i guess
-//         socket.readable().await?;
-//
-//         // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
-//         let mut buf = vec![0u8; 1024];
-//
-//         match socket.try_recv(&mut buf) {
-//             Ok(size) => {
-//                 let event = MessageKind::from_bytes(size, &buf)?;
-//                 println!("Event: {event:#?}");
-//
-//                 if let MessageKind::HandshakeResponse { .. } = event {
-//                     // if we receive an Ok initial handshake, we send a new handshake signifying
-//                     // what we want to listen to.
-//                     let subscription = build_msg(Operation::SubscribeUpdate, Device::IPhone);
-//                     let res = socket.send(&subscription).await?;
-//                 }
-//             }
-//
-//             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-//                 continue;
-//             }
-//
-//             Err(e) => {
-//                 bail!(e)
-//             }
-//         }
-//     }
-//
-//     Ok(())
-// }
+    /// sends a message to the udp server.
+    ///
+    /// * `operation`: kind of op we want the udp server to update on.
+    pub async fn send_message(&self, operation: Operation) -> anyhow::Result<()> {
+        self.socket
+            .send(&build_udp_message(operation, self.device))
+            .await?;
+        Ok(())
+    }
 
-/// builds a message to send to the UDP server.
-///
-/// * `op`: the operation that we want to send out
-/// * `device`: the type of device that is making the request.
-fn build_msg(op: Operation, device: Device) -> BytesMut {
-    let mut msg = BytesMut::with_capacity(12);
-    msg.put_i32_le(device as i32);
-    msg.put_i32_le(1);
-    msg.put_i32_le(op as i32);
+    /// receives the next event on the server.
+    pub async fn recv_event(&self) -> anyhow::Result<Event> {
+        // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
+        let mut buf = vec![0u8; 1024];
+        let read_size = self.socket.recv(&mut buf).await?;
 
-    msg
+        Event::from_bytes(read_size, &buf)
+    }
 }
