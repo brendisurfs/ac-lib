@@ -1,8 +1,8 @@
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
 
-// must send on connect.
 #[derive(Debug, Copy, Clone)]
+/// An identifier for the current device this library is running on.
 pub enum Device {
     IPhone = 0,
     IPad = 1,
@@ -11,14 +11,13 @@ pub enum Device {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// our requested action to listen to or inform the UDP server of.
 pub enum Operation {
     Handshake = 0,
     SubscribeUpdate = 1,
     SubscribeSpot = 2,
     Dismiss = 3,
 }
-
-// Car Info is huge:
 
 // char identifier [0;4];
 // int size;
@@ -81,9 +80,9 @@ pub enum Event {
         driver_name: String,
         identifier: i32,
         version: i32,
-        /// track name is parsed from utf16le
+        /// utf16le
         track_name: String,
-        /// track config is parsed from utf16le
+        /// utf16le
         track_config: String,
     },
     CarInfo {
@@ -209,7 +208,7 @@ pub(crate) fn parse_utf16_chars(buf: &[u16]) -> String {
 /// extracts a bool from the given byte slice.
 ///
 /// * `buf`: the buffer to extrac the bool from
-/// errors if the buffer cannot be made into a u8 from le bytes.
+/// * errors if the buffer cannot be made into a u8 from le bytes.
 pub(crate) fn parse_bool_from_bytes(buf: &[u8]) -> anyhow::Result<bool> {
     Ok(!matches!(u8::from_le_bytes(buf.try_into()?), 0))
 }

@@ -1,17 +1,11 @@
 //! This is a goofy little project to learn about displaying data from assetto corsa.
 //! reference for data: https://docs.google.com/document/d/1KfkZiIluXZ6mMhLWfDX1qAGbvhGRC3ZUzjVIt5FQpp4/pub
 //! also referrence: https://github.com/rickwest/ac-remote-telemetry-client/blob/master/src/parsers/RTCarInfoParser.js
-//! notes for parsing:
-//! int  are 32 bit little endian integers
-//! float are 32 bit floating point numbers
-//! bool are 8 bit boolean value
 
 mod parser;
 
 use parser::{Device, Event, Operation, build_udp_message};
 use tokio::net::{ToSocketAddrs, UdpSocket};
-
-const AC_VERSION: i32 = 1;
 
 /// A Client connects to the remote Assetto Corsa UDP server,
 /// allowing the user to receive UDP telemetry updates about the current session.
@@ -24,13 +18,20 @@ pub struct Client {
 }
 
 impl Client {
+    /// creates a new Assetto Corsa UDP Client
+    ///
+    /// * `remote_addr`:  the addr the ACServer is running on
+    /// * `device`:  the device this client is running on
     pub async fn new<A>(remote_addr: A, device: Device) -> anyhow::Result<Self>
     where
         A: ToSocketAddrs,
     {
         // NOTE: this needs to be chosen by the OS, or else it will never pick up.
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+
+        // TODO: implement exponential backoff for connecting to a client.
         socket.connect(remote_addr).await?;
+
         Ok(Self { socket, device })
     }
 
