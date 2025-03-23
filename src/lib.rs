@@ -26,7 +26,8 @@ impl Client {
     where
         A: ToSocketAddrs,
     {
-        // NOTE: this needs to be chosen by the OS, or else it will never pick up.
+        // NOTE : (3/22/2025) this needs to be chosen by the OS, or else it will never pick up.
+        // However, this may change if the setup is on ios.
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
         // TODO: implement exponential backoff for connecting to a client.
