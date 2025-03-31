@@ -40,9 +40,9 @@ impl Client {
     ///
     /// * `operation`: kind of op we want the udp server to update on.
     pub async fn send_message(&self, operation: Operation) -> anyhow::Result<()> {
-        self.socket
-            .send(&build_udp_message(operation, self.device))
-            .await?;
+        let msg = build_udp_message(operation, self.device);
+        self.socket.send(&msg).await?;
+
         Ok(())
     }
 
