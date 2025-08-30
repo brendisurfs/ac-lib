@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.97"
 bytes = "1.10.1"
-tokio = { version = "1.44.1", features = ["net", "time"] }
+tokio = { version = "1.44.2", features = ["net", "time"] }
