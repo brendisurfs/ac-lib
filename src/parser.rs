@@ -1,9 +1,11 @@
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 /// An identifier for the current device this library is running on.
+/// Currently not used by AC, but required anyway.
 pub enum Device {
+    #[default]
     IPhone = 0,
     IPad = 1,
     AndroidPhone = 2,
@@ -210,7 +212,7 @@ pub(crate) fn parse_to_utf16_chars(buf: &[u8]) -> String {
     String::from_utf16_lossy(
         &buf.iter()
             .map(|v| *v as u16)
-            .map(|v| v.to_le())
+            .map(u16::to_le)
             .collect::<Vec<_>>(),
     )
     .chars()
