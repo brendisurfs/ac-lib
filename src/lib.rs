@@ -13,6 +13,8 @@ use anyhow::{anyhow, bail};
 use exponential_backoff::Backoff;
 use parser::{Device, Event, Operation, build_udp_message};
 
+use crate::parser::{CAR_INFO_LEN, HANDSHAKE_RES_LEN, LAP_INFO_LEN};
+
 /// Exponential backoff maximum attempts.
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -77,9 +79,9 @@ impl Client {
         let read_size = self.socket.recv(&mut buf)?;
 
         let ac_event = match read_size {
-            408 => Event::HandshakeResponse,
-            328 => Event::CarInfo,
-            212 => Event::LapInfo,
+            HANDSHAKE_RES_LEN => Event::HandshakeResponse,
+            CAR_INFO_LEN => Event::CarInfo,
+            LAP_INFO_LEN => Event::LapInfo,
             _ => bail!("No matching size found for message"),
         };
 
