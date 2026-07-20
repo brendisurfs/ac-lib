@@ -4,6 +4,10 @@
 
 mod parser;
 
+use std::time::Duration;
+
+use anyhow::anyhow;
+use exponential_backoff::Backoff;
 use parser::{Device, Event, Operation, build_udp_message};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
@@ -16,6 +20,8 @@ pub struct Client {
     device: Device,
     socket: UdpSocket,
 }
+/// Exponential backoff maximum attempts.
+const MAX_ATTEMPTS: u32 = 3;
 
 impl Client {
     /// creates a new Assetto Corsa UDP Client
@@ -31,7 +37,21 @@ impl Client {
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
         // TODO: implement exponential backoff for connecting to a client.
-        socket.connect(remote_addr).await?;
+
+        let min_duration = Duration::from_secs(1);
+        let max_duration = Duration::from_secs(10);
+
+        let backoff = Backoff::new(MAX_ATTEMPTS, min_duration, max_duration);
+        for duration in backoff {
+            if let Err(why) = socket.connect(&remote_addr).await {
+                eprintln!("Error connecting: retrying...");
+
+                match duration {
+                    Some(sleep_time) => tokio::time::sleep(sleep_time).await,
+                    None => return Err(anyhow!(why)),
+                }
+            }
+        }
 
         Ok(Self { socket, device })
     }
@@ -53,5 +73,19 @@ impl Client {
         let read_size = self.socket.recv(&mut buf).await?;
 
         Event::from_bytes(read_size, &buf)
+    }
+}
+
+#[cfg(test)]
+mod lib_tests {
+
+    #[tokio::test]
+    async fn test_send_message() {
+        todo!("Implement send message test");
+    }
+
+    #[tokio::test]
+    async fn test_recv_event() {
+        todo!("Implement receive event");
     }
 }
