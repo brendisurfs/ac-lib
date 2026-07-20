@@ -1,6 +1,7 @@
 //! reference for data: https://docs.google.com/document/d/1KfkZiIluXZ6mMhLWfDX1qAGbvhGRC3ZUzjVIt5FQpp4/pub
 //! also referrence: https://github.com/rickwest/ac-remote-telemetry-client/blob/master/src/parsers/RTCarInfoParser.js
 
+mod api_binding;
 mod parser;
 
 use std::{
@@ -9,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use exponential_backoff::Backoff;
 use parser::{Device, Event, Operation, build_udp_message};
 
@@ -70,13 +71,20 @@ impl Client {
     }
 
     /// receives the next event on the server.
-    pub fn recv_event(&self) -> anyhow::Result<Event> {
+    pub fn recv_raw_event_buffer(&self) -> anyhow::Result<(Event, [u8; 1024])> {
         // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
         // TODO: calculate appropriate max size buffer to read into.
-        let mut buf = vec![0u8; 1024];
+        let mut buf = [0u8; 1024];
         let read_size = self.socket.recv(&mut buf)?;
 
-        Event::from_bytes(read_size, &buf)
+        let ac_event = match read_size {
+            408 => Event::HandshakeResponse,
+            328 => Event::CarInfo,
+            212 => Event::LapInfo,
+            _ => bail!("No matching size found for message"),
+        };
+
+        Ok((ac_event, buf))
     }
 }
 
