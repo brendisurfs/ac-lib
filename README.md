@@ -20,7 +20,7 @@ structs.
 
 ```
 ac_lib/
-├── Cargo.toml        # crate manifest (async runtime: tokio; error handling: anyhow; buffers: bytes)
+├── Cargo.toml        # crate manifest (error handling: anyhow; buffers: bytes; retry: exponential-backoff)
 ├── src/
 │   ├── lib.rs        # public Client API: connect, send handshake/subscribe, receive events
 │   └── parser.rs     # wire format: Device/Operation enums, Event parsing, byte-level helpers
@@ -28,14 +28,16 @@ ac_lib/
 
 ### `src/lib.rs`
 
-Exposes `Client`, the entry point for consumers of the library:
+Exposes `Client`, a synchronous (blocking) entry point for consumers of the
+library — no async runtime required:
 
 - `Client::new(remote_addr, device)` — binds a local UDP socket and connects
-  it to the AC server's telemetry address.
+  it to the AC server's telemetry address, retrying the connection with
+  exponential backoff on failure.
 - `Client::send_message(operation)` — sends a `Handshake`, `SubscribeUpdate`,
   `SubscribeSpot`, or `Dismiss` request.
-- `Client::recv_event()` — awaits the next UDP packet and parses it into an
-  `Event`.
+- `Client::recv_event()` — blocks until the next UDP packet arrives and
+  parses it into an `Event`.
 
 ### `src/parser.rs`
 
@@ -83,15 +85,14 @@ cargo test
 use ac_lib::Client;
 use parser::{Device, Operation}; // re-export as needed from your integration
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let client = Client::new("127.0.0.1:9996", Device::IPhone).await?;
+fn main() -> anyhow::Result<()> {
+    let client = Client::new("127.0.0.1:9996", Device::IPhone)?;
 
-    client.send_message(Operation::Handshake).await?;
-    client.send_message(Operation::SubscribeUpdate).await?;
+    client.send_message(Operation::Handshake)?;
+    client.send_message(Operation::SubscribeUpdate)?;
 
     loop {
-        let event = client.recv_event().await?;
+        let event = client.recv_event()?;
         println!("{event:?}");
     }
 }
@@ -108,8 +109,8 @@ this client.
 - [x] `HandshakeResponse` frame parsing
 - [x] `CarInfo` frame parsing (speed, pedals, RPM, gear, per-wheel physics,
       world position)
+- [x] Exponential backoff / reconnect handling on connection loss
 - [ ] `LapInfo` frame parsing (currently returns default/empty values)
-- [ ] Exponential backoff / reconnect handling on connection loss
 - [ ] HID device interface — abstract trait for output devices (wheels,
       button boxes, dashboards) to consume parsed `Event`s
 - [ ] Concrete HID device implementations (force feedback wheels, shift
