@@ -9,9 +9,11 @@ use std::{
     time::Duration,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use exponential_backoff::Backoff;
 use parser::{Device, Event, Operation, build_udp_message};
+
+use crate::parser::{CAR_INFO_LEN, HANDSHAKE_RES_LEN, LAP_INFO_LEN};
 
 /// Exponential backoff maximum attempts.
 const MAX_ATTEMPTS: u32 = 3;
@@ -70,13 +72,20 @@ impl Client {
     }
 
     /// receives the next event on the server.
-    pub fn recv_event(&self) -> anyhow::Result<Event> {
+    pub fn recv_raw_event_buffer(&self) -> anyhow::Result<(Event, [u8; 1024])> {
         // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
         // TODO: calculate appropriate max size buffer to read into.
-        let mut buf = vec![0u8; 1024];
+        let mut buf = [0u8; 1024];
         let read_size = self.socket.recv(&mut buf)?;
 
-        Event::from_bytes(read_size, &buf)
+        let ac_event = match read_size {
+            HANDSHAKE_RES_LEN => Event::HandshakeResponse,
+            CAR_INFO_LEN => Event::CarInfo,
+            LAP_INFO_LEN => Event::LapInfo,
+            _ => bail!("No matching size found for message"),
+        };
+
+        Ok((ac_event, buf))
     }
 }
 
