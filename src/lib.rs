@@ -4,8 +4,15 @@
 
 mod parser;
 
+use std::time::Duration;
+
+use anyhow::anyhow;
+use exponential_backoff::Backoff;
 use parser::{Device, Event, Operation, build_udp_message};
 use tokio::net::{ToSocketAddrs, UdpSocket};
+
+/// Exponential backoff maximum attempts.
+const MAX_ATTEMPTS: u32 = 3;
 
 /// A Client connects to the remote Assetto Corsa UDP server,
 /// allowing the user to receive UDP telemetry updates about the current session.
@@ -30,8 +37,24 @@ impl Client {
         // However, this may change if the setup is on ios.
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
-        // TODO: implement exponential backoff for connecting to a client.
-        socket.connect(remote_addr).await?;
+        let min_duration = Duration::from_secs(1);
+        let max_duration = Duration::from_secs(10);
+
+        let backoff = Backoff::new(MAX_ATTEMPTS, min_duration, max_duration);
+
+        for duration in backoff {
+            match socket.connect(&remote_addr).await {
+                Ok(()) => break,
+                Err(why) => {
+                    eprintln!("Error connecting: retrying...");
+
+                    match duration {
+                        Some(sleep_time) => tokio::time::sleep(sleep_time).await,
+                        None => return Err(anyhow!(why)),
+                    }
+                }
+            }
+        }
 
         Ok(Self { socket, device })
     }
@@ -49,9 +72,30 @@ impl Client {
     /// receives the next event on the server.
     pub async fn recv_event(&self) -> anyhow::Result<Event> {
         // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
+        // TODO: calculate appropriate max size buffer to read into.
         let mut buf = vec![0u8; 1024];
         let read_size = self.socket.recv(&mut buf).await?;
 
         Event::from_bytes(read_size, &buf)
+    }
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use tokio::net::UdpSocket;
+
+    // Builds a test socket listener to confirm messages.
+    async fn build_socket_listener() {
+        let listener = UdpSocket::bind("0.0.0.0:0").await.expect("failed to bind.");
+    }
+
+    #[tokio::test]
+    async fn test_send_message() {
+        todo!("Implement send message test");
+    }
+
+    #[tokio::test]
+    async fn test_recv_event() {
+        todo!("Implement receive event");
     }
 }
