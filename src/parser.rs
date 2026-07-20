@@ -1,9 +1,9 @@
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
 
-const LAP_INFO_LEN: usize = 212;
-const CAR_INFO_LEN: usize = 328;
-const HANDSHAKE_RES_LEN: usize = 408;
+pub(crate) const LAP_INFO_LEN: usize = 212;
+pub(crate) const CAR_INFO_LEN: usize = 328;
+pub(crate) const HANDSHAKE_RES_LEN: usize = 408;
 
 trait ParseableEvent {
     fn from_bytes(buf: &[u8]) -> anyhow::Result<Self>
