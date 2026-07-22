@@ -20,10 +20,12 @@ structs.
 
 ```
 ac_lib/
-├── Cargo.toml        # crate manifest (error handling: anyhow; buffers: bytes; retry: exponential-backoff)
+├── Cargo.toml               # crate manifest (error handling: anyhow/thiserror; buffers: bytes; retry: exponential-backoff)
 ├── src/
-│   ├── lib.rs        # public Client API: connect, send handshake/subscribe, receive events
-│   └── parser.rs     # wire format: Device/Operation enums, Event parsing, byte-level helpers
+│   ├── lib.rs               # public Client API: connect, send handshake/subscribe, receive raw events
+│   └── parser/
+│       ├── mod.rs           # wire format: Device/Operation/Event, HandshakeResponse/CarInfo/LapInfo parsing
+│       └── byte_cursor.rs   # ByteCursor: sequential byte-slice reader (i32/u32/f32/bool/wheels/xyz)
 ```
 
 ### `src/lib.rs`
@@ -36,10 +38,12 @@ library — no async runtime required:
   exponential backoff on failure.
 - `Client::send_message(operation)` — sends a `Handshake`, `SubscribeUpdate`,
   `SubscribeSpot`, or `Dismiss` request.
-- `Client::recv_event()` — blocks until the next UDP packet arrives and
-  parses it into an `Event`.
+- `Client::recv_raw_event_buffer()` — blocks until the next UDP packet
+  arrives, identifies which `Event` it is by payload size, and returns it
+  alongside the raw 1024-byte buffer for the caller to parse further (e.g.
+  via `CarInfo::from_bytes`).
 
-### `src/parser.rs`
+### `src/parser/mod.rs`
 
 Contains the wire protocol details:
 
@@ -53,10 +57,16 @@ Contains the wire protocol details:
   - `HandshakeResponse` (408 bytes) — car/driver/track identification.
   - `CarInfo` (328 bytes) — full per-frame car telemetry (speed, pedals,
     RPM, per-wheel slip/load/suspension data, world position, etc).
-  - `LapInfo` (212 bytes) — lap completion data (parsing not yet
-    implemented — see checklist).
-- Byte-parsing helpers for UTF-8/UTF-16LE strings, bools, and per-wheel
-  `[f32; 4]` groups.
+  - `LapInfo` (212 bytes) — lap completion data (car/driver name, lap
+    number, lap time).
+- `parse_utf8_chars` / `parse_to_utf16_chars` — string decoding helpers used
+  by the frame parsers above.
+
+### `src/parser/byte_cursor.rs`
+
+`ByteCursor` walks a byte slice left to right, handing out correctly-sized
+primitives (`i32`, `u32`, `f32`, `bool`) and per-wheel `[f32; 4]` / `[f32; 3]`
+groups without requiring manually computed offsets into the buffer.
 
 ## Installation
 
@@ -92,7 +102,10 @@ fn main() -> anyhow::Result<()> {
     client.send_message(Operation::SubscribeUpdate)?;
 
     loop {
-        let event = client.recv_event()?;
+        let (event, buf) = client.recv_raw_event_buffer()?;
+        // `event` tells you which frame arrived (by payload size); parse the
+        // raw buffer into the matching typed struct, e.g.:
+        // let car_info = CarInfo::from_bytes(&buf[..CAR_INFO_LEN])?;
         println!("{event:?}");
     }
 }
@@ -111,11 +124,13 @@ this client.
       world position)
 - [x] Exponential backoff / reconnect handling on connection loss
 - [x] `LapInfo` frame parsing
+- [x] Unit tests around frame parsing (`CarInfo`/`LapInfo` offset
+      verification, `ByteCursor` boundary checks)
 - [ ] HID device interface — abstract trait for output devices (wheels,
       button boxes, dashboards) to consume parsed `Event`s
 - [ ] Concrete HID device implementations (force feedback wheels, shift
       lights, etc.)
-- [ ] Integration/unit tests around frame parsing
+- [ ] Integration tests against a live/mocked AC UDP server
 - [ ] Publish to crates.io
 
 ## Roadmap: HID support
