@@ -2,6 +2,7 @@
 //! also referrence: https://github.com/rickwest/ac-remote-telemetry-client/blob/master/src/parsers/RTCarInfoParser.js
 
 mod parser;
+mod utils;
 
 use std::{
     io,
@@ -11,7 +12,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use exponential_backoff::Backoff;
-use parser::{Device, Event, Operation, build_udp_message};
+use parser::{Device, Event, Operation};
 
 use crate::parser::{CAR_INFO_LEN, HANDSHAKE_RES_LEN, LAP_INFO_LEN};
 
@@ -67,7 +68,7 @@ impl Client {
     ///
     /// * `operation`: kind of op we want the udp server to update on.
     pub fn send_message(&self, operation: Operation) -> io::Result<usize> {
-        let msg = build_udp_message(operation, self.device);
+        let msg = utils::build_udp_message(operation, self.device);
         self.socket.send(&msg)
     }
 
