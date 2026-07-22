@@ -265,12 +265,20 @@ impl IntoEvent for LapInfo {
             return Err(ParserError::IncorrectBufferSize(buf.len()));
         }
 
+        let mut c = ByteCursor::new(buf);
+
+        let car_id_num = c.i32()?;
+        let lap = c.i32()?;
+        let driver_name = parse_to_utf16_chars(c.take(100));
+        let car_name = parse_to_utf16_chars(c.take(100));
+        let time = c.i32()?;
+
         Ok(LapInfo {
-            car_id_num: i32::default(),
-            time: i32::default(),
-            lap: i32::default(),
-            car_name: String::default(),
-            driver_name: String::default(),
+            car_id_num,
+            time,
+            lap,
+            car_name,
+            driver_name,
         })
     }
 }
@@ -324,7 +332,7 @@ fn parse_to_utf16_chars(buf: &[u8]) -> String {
 #[cfg(test)]
 mod parser_tests {
 
-    use crate::parser::{CAR_INFO_LEN, CarInfo, IntoEvent};
+    use crate::parser::{CAR_INFO_LEN, CarInfo, IntoEvent, LAP_INFO_LEN, LapInfo};
 
     fn put_f32(buf: &mut [u8], offset: usize, val: f32) {
         buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
@@ -439,5 +447,39 @@ mod parser_tests {
     fn car_info_rejects_wrong_size_buffer() {
         let buf = vec![0u8; CAR_INFO_LEN - 1];
         assert!(CarInfo::from_bytes(&buf).is_err());
+    }
+
+    // Builds a 212-byte LapInfo buffer with distinct marker values so a wrong
+    // offset reads a value that doesn't match its expected field.
+    fn marker_lap_info_buf() -> Vec<u8> {
+        let mut buf = vec![0u8; LAP_INFO_LEN];
+
+        put_i32(&mut buf, 0, 7); // car_id_num
+        put_i32(&mut buf, 4, 3); // lap
+
+        buf[8] = b'D'; // driver_name
+        buf[108] = b'C'; // car_name
+
+        put_i32(&mut buf, 208, 12345); // time
+
+        buf
+    }
+
+    #[test]
+    fn lap_info_fields_land_on_documented_offsets() {
+        let buf = marker_lap_info_buf();
+        let info = LapInfo::from_bytes(&buf).expect("212-byte buffer should parse");
+
+        assert_eq!(info.car_id_num, 7);
+        assert_eq!(info.lap, 3);
+        assert_eq!(info.driver_name, "D");
+        assert_eq!(info.car_name, "C");
+        assert_eq!(info.time, 12345);
+    }
+
+    #[test]
+    fn lap_info_rejects_wrong_size_buffer() {
+        let buf = vec![0u8; LAP_INFO_LEN - 1];
+        assert!(LapInfo::from_bytes(&buf).is_err());
     }
 }
