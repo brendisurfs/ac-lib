@@ -10,8 +10,9 @@ use std::{
 };
 
 use anyhow::{anyhow, bail};
+use bytes::{BufMut, BytesMut};
 use exponential_backoff::Backoff;
-use parser::{Device, Event, Operation, build_udp_message};
+use parser::{Device, Event, Operation};
 
 use crate::parser::{CAR_INFO_LEN, HANDSHAKE_RES_LEN, LAP_INFO_LEN};
 
@@ -67,7 +68,7 @@ impl Client {
     ///
     /// * `operation`: kind of op we want the udp server to update on.
     pub fn send_message(&self, operation: Operation) -> io::Result<usize> {
-        let msg = build_udp_message(operation, self.device);
+        let msg = self.build_udp_message(operation);
         self.socket.send(&msg)
     }
 
@@ -86,6 +87,19 @@ impl Client {
         };
 
         Ok((ac_event, buf))
+    }
+
+    /// builds a message to be sent to the Assetto Corsa UDP server.
+    ///
+    /// * `op`: which operation to send
+    /// * `device`: what kind of device is sending this message
+    fn build_udp_message(&self, op: Operation) -> BytesMut {
+        let mut msg = BytesMut::with_capacity(12);
+        msg.put_i32_le(self.device as i32);
+        msg.put_i32_le(1);
+        msg.put_i32_le(op as i32);
+
+        msg
     }
 }
 
