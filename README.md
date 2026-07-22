@@ -110,7 +110,7 @@ this client.
 - [x] `CarInfo` frame parsing (speed, pedals, RPM, gear, per-wheel physics,
       world position)
 - [x] Exponential backoff / reconnect handling on connection loss
-- [ ] `LapInfo` frame parsing (currently returns default/empty values)
+- [x] `LapInfo` frame parsing
 - [ ] HID device interface — abstract trait for output devices (wheels,
       button boxes, dashboards) to consume parsed `Event`s
 - [ ] Concrete HID device implementations (force feedback wheels, shift
