@@ -1,12 +1,27 @@
+use std::range::Range;
+
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
+use thiserror::Error;
 
 pub(crate) const LAP_INFO_LEN: usize = 212;
 pub(crate) const CAR_INFO_LEN: usize = 328;
 pub(crate) const HANDSHAKE_RES_LEN: usize = 408;
 
-trait ParseableEvent {
-    fn from_bytes(buf: &[u8]) -> anyhow::Result<Self>
+/// module errors
+#[derive(Error, Debug)]
+enum ParserError {
+    /// If a parsing function receives an incorrect buffer sizing
+    #[error("Received incorrect size of buffer: {0}")]
+    InvalidSliceSize(usize),
+
+    #[error("Unable to convert bytes to Event")]
+    BytesConversionFailed,
+}
+
+/// Trait that maps to converting into an event struct
+trait IntoEvent {
+    fn from_bytes(buf: &[u8]) -> Result<Self, ParserError>
     where
         Self: Sized;
 }
@@ -41,13 +56,26 @@ pub struct HandshakeResponse {
     pub track_config: String,
 }
 
-impl ParseableEvent for HandshakeResponse {
-    fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
+const IDENTIFIER_RANGE: [Range<i32>; 1] = [Range {
+    start: 200,
+    end: 204,
+}];
+
+impl IntoEvent for HandshakeResponse {
+    fn from_bytes(buf: &[u8]) -> Result<HandshakeResponse, ParserError> {
+        let identifier_bytes: [u8; 4] = buf[200..204]
+            .try_into()
+            .map_err(|_| ParserError::BytesConversionFailed)?;
+
+        let version_bytes: [u8; 4] = buf[204..208]
+            .try_into()
+            .map_err(|_| ParserError::BytesConversionFailed)?;
+
         Ok(HandshakeResponse {
             car_name: parse_utf8_chars(&buf[0..100]),
             driver_name: parse_utf8_chars(&buf[100..200]),
-            identifier: i32::from_le_bytes(buf[200..204].try_into()?),
-            version: i32::from_le_bytes(buf[204..208].try_into()?),
+            identifier: i32::from_le_bytes(identifier_bytes),
+            version: i32::from_le_bytes(version_bytes),
             track_name: parse_to_utf16_chars(&buf[208..308]),
             track_config: parse_to_utf16_chars(&buf[308..408]),
         })
@@ -100,7 +128,7 @@ pub struct CarInfo {
     pub car_coordinates: [f32; 4],
 }
 
-impl ParseableEvent for CarInfo {
+impl IntoEvent for CarInfo {
     fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
         Ok(CarInfo {
             identifier: parse_utf8_chars(&buf[0..4]).parse()?,
@@ -162,7 +190,7 @@ pub struct LapInfo {
     pub car_name: String,
     pub driver_name: String,
 }
-impl ParseableEvent for LapInfo {
+impl IntoEvent for LapInfo {
     fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
         if buf.len() != LAP_INFO_LEN {
             bail!("Incorrect buffer size");
@@ -183,7 +211,6 @@ impl ParseableEvent for LapInfo {
 #[derive(Debug)]
 pub enum Event {
     HandshakeResponse,
-
     CarInfo,
     LapInfo,
 }
@@ -214,15 +241,15 @@ fn parse_utf8_chars(buf: &[u8]) -> String {
 ///
 /// * `buf`:
 fn parse_to_utf16_chars(buf: &[u8]) -> String {
-    String::from_utf16_lossy(
-        &buf.iter()
-            .map(|v| *v as u16)
-            .map(u16::to_le)
-            .collect::<Vec<_>>(),
-    )
-    .chars()
-    .filter(|v| v.ne(&'\0') && v.ne(&'%'))
-    .collect::<String>()
+    let converted_bytes = &buf
+        .iter()
+        .map(|v| u16::from(*v).to_le())
+        .collect::<Vec<_>>();
+
+    String::from_utf16_lossy(converted_bytes)
+        .chars()
+        .filter(|v| v.ne(&'\0') && v.ne(&'%'))
+        .collect::<String>()
 }
 
 /// extracts a bool from the given byte slice.
@@ -239,6 +266,10 @@ fn parse_bool_from_bytes(buf: &[u8]) -> anyhow::Result<bool> {
 ///
 /// * `buf`: the buffer to extract the ranges from.
 fn parse_f32_wheels(buf: &[u8]) -> anyhow::Result<[f32; 4]> {
+    if buf.len() < 20 {
+        bail!("Incorrect buffer size: {:?}", buf.len());
+    }
+
     let front_left = f32::from_le_bytes(buf[0..4].try_into()?);
     let front_right = f32::from_le_bytes(buf[4..8].try_into()?);
     let back_left = f32::from_le_bytes(buf[8..12].try_into()?);
@@ -258,4 +289,38 @@ pub(crate) fn build_udp_message(op: Operation, device: Device) -> BytesMut {
     msg.put_i32_le(op as i32);
 
     msg
+}
+
+#[cfg(test)]
+mod parser_tests {
+
+    use crate::parser::parse_f32_wheels;
+
+    // Wheels parse on correct input
+    #[test]
+    fn wheels_parse_correct_size_buf() {
+        let front_left: [u8; 5] = [10, 12, 14, 16, 18];
+        let front_right: [u8; 5] = [10, 12, 14, 16, 18];
+        let back_left: [u8; 5] = [10, 12, 14, 16, 18];
+        let back_right: [u8; 5] = [10, 12, 14, 16, 18];
+
+        let buf = [front_left, front_right, back_left, back_right].concat();
+
+        let res = parse_f32_wheels(&buf);
+        assert!(res.is_ok(), "Buffer should be correct size and parse.");
+    }
+    // Wheels dont parse on incorrect input and handles error bounds
+    #[test]
+    fn wheels_parse_incorrect_size_buf() {
+        let front_left: [u8; 5] = [10, 12, 14, 16, 18];
+        let front_right: [u8; 5] = [10, 12, 14, 16, 18];
+        let back_left: [u8; 5] = [10, 12, 14, 16, 18];
+        let back_right: [u8; 4] = [10, 12, 14, 16];
+
+        let mut buf = [front_left, front_right, back_left].concat();
+        buf.append(&mut back_right.to_vec());
+
+        let res = parse_f32_wheels(&buf);
+        assert!(res.is_err(), "Error boundary should be caught");
+    }
 }
