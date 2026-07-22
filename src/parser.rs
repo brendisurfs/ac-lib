@@ -1,5 +1,3 @@
-use std::range::Range;
-
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
 use thiserror::Error;
@@ -46,6 +44,58 @@ pub enum Operation {
     Dismiss = 3,
 }
 
+/// Walks a byte buffer left to right, handing out correctly-sized slices
+/// and primitives without requiring manually computed offsets.
+struct ByteCursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> ByteCursor<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    /// Returns the next `n` bytes and advances the cursor past them.
+    fn take(&mut self, n: usize) -> &'a [u8] {
+        let slice = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        slice
+    }
+
+    /// Advances the cursor by `n` bytes without returning them.
+    fn skip(&mut self, n: usize) {
+        self.pos += n;
+    }
+
+    fn i32(&mut self) -> anyhow::Result<i32> {
+        Ok(i32::from_le_bytes(self.take(4).try_into()?))
+    }
+
+    fn u32(&mut self) -> anyhow::Result<u32> {
+        Ok(u32::from_le_bytes(self.take(4).try_into()?))
+    }
+
+    fn f32(&mut self) -> anyhow::Result<f32> {
+        Ok(f32::from_le_bytes(self.take(4).try_into()?))
+    }
+
+    fn bool(&mut self) -> anyhow::Result<bool> {
+        parse_bool_from_bytes(self.take(1))
+    }
+
+    fn wheels(&mut self) -> anyhow::Result<[f32; 4]> {
+        parse_f32_wheels(self.take(16))
+    }
+
+    fn xyz(&mut self) -> anyhow::Result<[f32; 3]> {
+        let x = self.f32()?;
+        let y = self.f32()?;
+        let z = self.f32()?;
+        Ok([x, y, z])
+    }
+}
+
 #[derive(Debug)]
 pub struct HandshakeResponse {
     pub car_name: String,
@@ -56,28 +106,31 @@ pub struct HandshakeResponse {
     pub track_config: String,
 }
 
-const IDENTIFIER_RANGE: [Range<i32>; 1] = [Range {
-    start: 200,
-    end: 204,
-}];
-
 impl IntoEvent for HandshakeResponse {
     fn from_bytes(buf: &[u8]) -> Result<HandshakeResponse, ParserError> {
-        let identifier_bytes: [u8; 4] = buf[200..204]
-            .try_into()
+        let mut cursor = ByteCursor::new(buf);
+
+        let car_name = parse_utf8_chars(cursor.take(100));
+        let driver_name = parse_utf8_chars(cursor.take(100));
+
+        let identifier = cursor
+            .i32()
             .map_err(|_| ParserError::BytesConversionFailed)?;
 
-        let version_bytes: [u8; 4] = buf[204..208]
-            .try_into()
+        let version = cursor
+            .i32()
             .map_err(|_| ParserError::BytesConversionFailed)?;
+
+        let track_name = parse_to_utf16_chars(cursor.take(100));
+        let track_config = parse_to_utf16_chars(cursor.take(100));
 
         Ok(HandshakeResponse {
-            car_name: parse_utf8_chars(&buf[0..100]),
-            driver_name: parse_utf8_chars(&buf[100..200]),
-            identifier: i32::from_le_bytes(identifier_bytes),
-            version: i32::from_le_bytes(version_bytes),
-            track_name: parse_to_utf16_chars(&buf[208..308]),
-            track_config: parse_to_utf16_chars(&buf[308..408]),
+            car_name,
+            driver_name,
+            identifier,
+            version,
+            track_name,
+            track_config,
         })
     }
 }
@@ -125,59 +178,108 @@ pub struct CarInfo {
     pub suspension_height: [f32; 4],
     pub car_pos_normalized: f32,
     pub car_slope: f32,
-    pub car_coordinates: [f32; 4],
+    pub car_coordinates: [f32; 3],
 }
 
 impl IntoEvent for CarInfo {
     fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
+        if buf.len() != CAR_INFO_LEN {
+            bail!("Incorrect buffer size");
+        }
+        let mut c = ByteCursor::new(buf);
+
+        let identifier = parse_utf8_chars(c.take(4)).parse()?;
+        let size = c.i32()?;
+        let speed_kmh = c.f32()?;
+        let speed_mph = c.f32()?;
+        let speed_ms = c.f32()?;
+
+        let is_abs_enabled = c.bool()?;
+        let is_abs_in_action = c.bool()?;
+        let is_tc_in_action = c.bool()?;
+        let is_tc_enabled = c.bool()?;
+        c.skip(2); // unused padding bytes (original ranges skipped 24..26)
+        let is_in_pit = c.bool()?;
+        let is_engine_limiter_on = c.bool()?;
+
+        let accg_vertical = c.f32()?;
+        let accg_horizontal = c.f32()?;
+        let accg_frontal = c.f32()?;
+
+        let lap_time = c.u32()?;
+        let last_lap = c.u32()?;
+        let best_lap = c.u32()?;
+        let lap_count = c.u32()?;
+
+        let gas = c.f32()?;
+        let brake = c.f32()?;
+        let clutch = c.f32()?;
+        let engine_rpm = c.f32()?;
+        let steer = c.f32()?;
+        let gear = c.i32()?;
+        let cg_height = c.f32()?;
+
+        let wheel_angular_speed = c.wheels()?;
+        let slip_angle = c.wheels()?;
+        let slip_angle_contact_patch = c.wheels()?;
+        let slip_ratio = c.wheels()?;
+        let tyre_slip = c.wheels()?;
+        let nd_slip = c.wheels()?;
+        let load = c.wheels()?;
+        let dy = c.wheels()?;
+        let mz = c.wheels()?;
+        let tyre_dirty_level = c.wheels()?;
+        let camber_rad = c.wheels()?;
+        let tyre_radius = c.wheels()?;
+        let tyre_loaded_radius = c.wheels()?;
+        let suspension_height = c.wheels()?;
+        let car_pos_normalized = c.f32()?;
+        let car_slope = c.f32()?;
+        let car_coordinates = c.xyz()?;
+
         Ok(CarInfo {
-            identifier: parse_utf8_chars(&buf[0..4]).parse()?,
-            size: i32::from_le_bytes(buf[4..8].try_into()?),
-            speed_kmh: f32::from_le_bytes(buf[8..12].try_into()?),
-            speed_mph: f32::from_le_bytes(buf[12..16].try_into()?),
-            speed_ms: f32::from_le_bytes(buf[16..20].try_into()?),
-
-            is_abs_enabled: parse_bool_from_bytes(&buf[20..21])?,
-            is_abs_in_action: parse_bool_from_bytes(&buf[21..22])?,
-            is_tc_in_action: parse_bool_from_bytes(&buf[22..23])?,
-            is_tc_enabled: parse_bool_from_bytes(&buf[23..24])?,
-            is_in_pit: parse_bool_from_bytes(&buf[26..27])?,
-            is_engine_limiter_on: parse_bool_from_bytes(&buf[27..28])?,
-
-            accg_vertical: f32::from_le_bytes(buf[28..32].try_into()?),
-            accg_horizontal: f32::from_le_bytes(buf[32..36].try_into()?),
-            accg_frontal: f32::from_le_bytes(buf[36..40].try_into()?),
-
-            lap_time: u32::from_le_bytes(buf[40..44].try_into()?),
-            last_lap: u32::from_le_bytes(buf[44..48].try_into()?),
-            best_lap: u32::from_le_bytes(buf[48..52].try_into()?),
-            lap_count: u32::from_le_bytes(buf[42..56].try_into()?),
-
-            gas: f32::from_le_bytes(buf[56..60].try_into()?),
-            brake: f32::from_le_bytes(buf[60..64].try_into()?),
-            clutch: f32::from_le_bytes(buf[64..68].try_into()?),
-            engine_rpm: f32::from_le_bytes(buf[68..72].try_into()?),
-            steer: f32::from_le_bytes(buf[72..76].try_into()?),
-            gear: i32::from_le_bytes(buf[76..80].try_into()?),
-            cg_height: f32::from_le_bytes(buf[80..84].try_into()?),
-
-            wheel_angular_speed: parse_f32_wheels(&buf[84..100])?,
-            slip_angle: parse_f32_wheels(&buf[100..116])?,
-            slip_angle_contact_patch: parse_f32_wheels(&buf[116..132])?,
-            slip_ratio: parse_f32_wheels(&buf[132..148])?,
-            tyre_slip: parse_f32_wheels(&buf[148..164])?,
-            nd_slip: parse_f32_wheels(&buf[164..180])?,
-            load: parse_f32_wheels(&buf[180..196])?,
-            dy: parse_f32_wheels(&buf[196..212])?,
-            mz: parse_f32_wheels(&buf[212..228])?,
-            tyre_dirty_level: parse_f32_wheels(&buf[228..244])?,
-            camber_rad: parse_f32_wheels(&buf[244..260])?,
-            tyre_radius: parse_f32_wheels(&buf[260..276])?,
-            tyre_loaded_radius: parse_f32_wheels(&buf[276..292])?,
-            suspension_height: parse_f32_wheels(&buf[292..308])?,
-            car_pos_normalized: f32::from_le_bytes(buf[308..312].try_into()?),
-            car_slope: f32::from_le_bytes(buf[312..316].try_into()?),
-            car_coordinates: parse_f32_wheels(&buf[316..332])?,
+            identifier,
+            size,
+            speed_kmh,
+            speed_mph,
+            speed_ms,
+            is_abs_enabled,
+            is_abs_in_action,
+            is_tc_in_action,
+            is_tc_enabled,
+            is_in_pit,
+            is_engine_limiter_on,
+            accg_vertical,
+            accg_horizontal,
+            accg_frontal,
+            lap_time,
+            last_lap,
+            best_lap,
+            lap_count,
+            gas,
+            brake,
+            clutch,
+            engine_rpm,
+            steer,
+            gear,
+            cg_height,
+            wheel_angular_speed,
+            slip_angle,
+            slip_angle_contact_patch,
+            slip_ratio,
+            tyre_slip,
+            nd_slip,
+            load,
+            dy,
+            mz,
+            tyre_dirty_level,
+            camber_rad,
+            tyre_radius,
+            tyre_loaded_radius,
+            suspension_height,
+            car_pos_normalized,
+            car_slope,
+            car_coordinates,
         })
     }
 }
