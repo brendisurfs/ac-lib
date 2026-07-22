@@ -1,3 +1,5 @@
+use std::char::ParseCharError;
+
 use anyhow::bail;
 use bytes::{BufMut, BytesMut};
 use thiserror::Error;
@@ -11,10 +13,25 @@ pub(crate) const HANDSHAKE_RES_LEN: usize = 408;
 enum ParserError {
     /// If a parsing function receives an incorrect buffer sizing
     #[error("Received incorrect size of buffer: {0}")]
-    InvalidSliceSize(usize),
+    IncorrectBufferSize(usize),
 
-    #[error("Unable to convert bytes to Event")]
-    BytesConversionFailed,
+    #[error("i32 failed to convert: {0}")]
+    I32ConversionFailed(String),
+
+    #[error("u32 failed to convert: {0}")]
+    U32ConversionFailed(String),
+
+    #[error("f32 failed to convert: {0}")]
+    F32ConversionFailed(String),
+
+    #[error("bool failed to convert: {0}")]
+    BoolConversionFailed(String),
+
+    #[error("wheel stats failed to convert: {0}")]
+    WheelsConversionFailed(String),
+
+    #[error("Char failed to convert: {0}")]
+    CharConversionFailed(String),
 }
 
 /// Trait that maps to converting into an event struct
@@ -68,27 +85,38 @@ impl<'a> ByteCursor<'a> {
         self.pos += n;
     }
 
-    fn i32(&mut self) -> anyhow::Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4).try_into()?))
+    fn i32(&mut self) -> Result<i32, ParserError> {
+        self.take(4)
+            .try_into()
+            .map(i32::from_le_bytes)
+            .map_err(|e| ParserError::I32ConversionFailed(e.to_string()))
     }
 
-    fn u32(&mut self) -> anyhow::Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4).try_into()?))
+    fn u32(&mut self) -> Result<u32, ParserError> {
+        self.take(4)
+            .try_into()
+            .map(u32::from_le_bytes)
+            .map_err(|e| ParserError::U32ConversionFailed(e.to_string()))
     }
 
-    fn f32(&mut self) -> anyhow::Result<f32> {
-        Ok(f32::from_le_bytes(self.take(4).try_into()?))
+    fn f32(&mut self) -> Result<f32, ParserError> {
+        self.take(4)
+            .try_into()
+            .map(f32::from_le_bytes)
+            .map_err(|e| ParserError::F32ConversionFailed(e.to_string()))
     }
 
-    fn bool(&mut self) -> anyhow::Result<bool> {
+    fn bool(&mut self) -> Result<bool, ParserError> {
         parse_bool_from_bytes(self.take(1))
+            .map_err(|e| ParserError::BoolConversionFailed(e.to_string()))
     }
 
-    fn wheels(&mut self) -> anyhow::Result<[f32; 4]> {
+    fn wheels(&mut self) -> Result<[f32; 4], ParserError> {
         parse_f32_wheels(self.take(16))
+            .map_err(|e| ParserError::WheelsConversionFailed(e.to_string()))
     }
 
-    fn xyz(&mut self) -> anyhow::Result<[f32; 3]> {
+    fn xyz(&mut self) -> Result<[f32; 3], ParserError> {
         let x = self.f32()?;
         let y = self.f32()?;
         let z = self.f32()?;
@@ -113,13 +141,8 @@ impl IntoEvent for HandshakeResponse {
         let car_name = parse_utf8_chars(cursor.take(100));
         let driver_name = parse_utf8_chars(cursor.take(100));
 
-        let identifier = cursor
-            .i32()
-            .map_err(|_| ParserError::BytesConversionFailed)?;
-
-        let version = cursor
-            .i32()
-            .map_err(|_| ParserError::BytesConversionFailed)?;
+        let identifier = cursor.i32()?;
+        let version = cursor.i32()?;
 
         let track_name = parse_to_utf16_chars(cursor.take(100));
         let track_config = parse_to_utf16_chars(cursor.take(100));
@@ -182,13 +205,19 @@ pub struct CarInfo {
 }
 
 impl IntoEvent for CarInfo {
-    fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
+    fn from_bytes(buf: &[u8]) -> Result<Self, ParserError> {
         if buf.len() != CAR_INFO_LEN {
-            bail!("Incorrect buffer size");
+            return Err(ParserError::IncorrectBufferSize(buf.len()));
         }
         let mut c = ByteCursor::new(buf);
 
-        let identifier = parse_utf8_chars(c.take(4)).parse()?;
+        let identifier = parse_utf8_chars(c.take(4))
+            .parse()
+            .map_err(|v: ParseCharError| {
+                let err_str = v.to_string();
+                ParserError::CharConversionFailed(err_str)
+            })?;
+
         let size = c.i32()?;
         let speed_kmh = c.f32()?;
         let speed_mph = c.f32()?;
@@ -293,9 +322,9 @@ pub struct LapInfo {
     pub driver_name: String,
 }
 impl IntoEvent for LapInfo {
-    fn from_bytes(buf: &[u8]) -> anyhow::Result<Self> {
+    fn from_bytes(buf: &[u8]) -> Result<Self, ParserError> {
         if buf.len() != LAP_INFO_LEN {
-            bail!("Incorrect buffer size");
+            return Err(ParserError::IncorrectBufferSize(buf.len()));
         }
 
         Ok(LapInfo {
@@ -368,7 +397,7 @@ fn parse_bool_from_bytes(buf: &[u8]) -> anyhow::Result<bool> {
 ///
 /// * `buf`: the buffer to extract the ranges from.
 fn parse_f32_wheels(buf: &[u8]) -> anyhow::Result<[f32; 4]> {
-    if buf.len() < 20 {
+    if buf.len() < 16 {
         bail!("Incorrect buffer size: {:?}", buf.len());
     }
 
@@ -396,7 +425,122 @@ pub(crate) fn build_udp_message(op: Operation, device: Device) -> BytesMut {
 #[cfg(test)]
 mod parser_tests {
 
-    use crate::parser::parse_f32_wheels;
+    use crate::parser::{CAR_INFO_LEN, CarInfo, IntoEvent, parse_f32_wheels};
+
+    fn put_f32(buf: &mut [u8], offset: usize, val: f32) {
+        buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    fn put_i32(buf: &mut [u8], offset: usize, val: i32) {
+        buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    fn put_u32(buf: &mut [u8], offset: usize, val: u32) {
+        buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    // Builds a 328-byte CarInfo buffer where every distinct field/element is
+    // a marker float/int equal to its own byte offset, so a wrong offset
+    // reads a value that doesn't match its expected position.
+    fn marker_car_info_buf() -> Vec<u8> {
+        let mut buf = vec![0u8; CAR_INFO_LEN];
+        // identifier: ASCII 'C' at byte 0, rest of the 4-byte field stays null
+        buf[0] = b'C';
+
+        put_i32(&mut buf, 4, 4); // size
+        put_f32(&mut buf, 8, 8.0); // speed_kmh
+        put_f32(&mut buf, 12, 12.0); // speed_mph
+        put_f32(&mut buf, 16, 16.0); // speed_ms
+
+        buf[20] = 1; // is_abs_enabled
+        buf[21] = 1; // is_abs_in_action
+        buf[22] = 1; // is_tc_in_action
+        buf[23] = 1; // is_tc_enabled
+        // 24, 25 = padding gap
+        buf[26] = 1; // is_in_pit
+        buf[27] = 1; // is_engine_limiter_on
+
+        put_f32(&mut buf, 28, 28.0); // accg_vertical
+        put_f32(&mut buf, 32, 32.0); // accg_horizontal
+        put_f32(&mut buf, 36, 36.0); // accg_frontal
+
+        put_u32(&mut buf, 40, 40); // lap_time
+        put_u32(&mut buf, 44, 44); // last_lap
+        put_u32(&mut buf, 48, 48); // best_lap
+        put_u32(&mut buf, 52, 52); // lap_count
+
+        put_f32(&mut buf, 56, 56.0); // gas
+        put_f32(&mut buf, 60, 60.0); // brake
+        put_f32(&mut buf, 64, 64.0); // clutch
+        put_f32(&mut buf, 68, 68.0); // engine_rpm
+        put_f32(&mut buf, 72, 72.0); // steer
+        put_i32(&mut buf, 76, 76); // gear
+        put_f32(&mut buf, 80, 80.0); // cg_height
+
+        // 14 wheel groups of 16 bytes each start at 84, end at 84 + 14*16 = 308
+        for i in 0..14 {
+            let base = 84 + i * 16;
+            for w in 0..4 {
+                put_f32(&mut buf, base + w * 4, (base + w * 4) as f32);
+            }
+        }
+
+        put_f32(&mut buf, 308, 308.0); // car_pos_normalized
+        put_f32(&mut buf, 312, 312.0); // car_slope
+        put_f32(&mut buf, 316, 316.0); // car_coordinates[0]
+        put_f32(&mut buf, 320, 320.0); // car_coordinates[1]
+        put_f32(&mut buf, 324, 324.0); // car_coordinates[2]
+
+        buf
+    }
+
+    #[test]
+    fn car_info_fields_land_on_documented_offsets() {
+        let buf = marker_car_info_buf();
+        let info = CarInfo::from_bytes(&buf).expect("328-byte buffer should parse");
+
+        assert_eq!(info.size, 4);
+        assert_eq!(info.speed_kmh, 8.0);
+        assert_eq!(info.speed_mph, 12.0);
+        assert_eq!(info.speed_ms, 16.0);
+
+        assert!(info.is_abs_enabled);
+        assert!(info.is_abs_in_action);
+        assert!(info.is_tc_in_action);
+        assert!(info.is_tc_enabled);
+        assert!(info.is_in_pit);
+        assert!(info.is_engine_limiter_on);
+
+        assert_eq!(info.accg_vertical, 28.0);
+        assert_eq!(info.accg_horizontal, 32.0);
+        assert_eq!(info.accg_frontal, 36.0);
+
+        assert_eq!(info.lap_time, 40);
+        assert_eq!(info.last_lap, 44);
+        assert_eq!(info.best_lap, 48);
+        assert_eq!(info.lap_count, 52); // guards the historical off-by-10 bug
+
+        assert_eq!(info.gas, 56.0);
+        assert_eq!(info.brake, 60.0);
+        assert_eq!(info.clutch, 64.0);
+        assert_eq!(info.engine_rpm, 68.0);
+        assert_eq!(info.steer, 72.0);
+        assert_eq!(info.gear, 76);
+        assert_eq!(info.cg_height, 80.0);
+
+        assert_eq!(info.wheel_angular_speed, [84.0, 88.0, 92.0, 96.0]);
+        assert_eq!(info.suspension_height, [292.0, 296.0, 300.0, 304.0]);
+
+        assert_eq!(info.car_pos_normalized, 308.0);
+        assert_eq!(info.car_slope, 312.0);
+        assert_eq!(info.car_coordinates, [316.0, 320.0, 324.0]);
+    }
+
+    #[test]
+    fn car_info_rejects_wrong_size_buffer() {
+        let buf = vec![0u8; CAR_INFO_LEN - 1];
+        assert!(CarInfo::from_bytes(&buf).is_err());
+    }
 
     // Wheels parse on correct input
     #[test]
@@ -414,13 +558,9 @@ mod parser_tests {
     // Wheels dont parse on incorrect input and handles error bounds
     #[test]
     fn wheels_parse_incorrect_size_buf() {
-        let front_left: [u8; 5] = [10, 12, 14, 16, 18];
-        let front_right: [u8; 5] = [10, 12, 14, 16, 18];
-        let back_left: [u8; 5] = [10, 12, 14, 16, 18];
-        let back_right: [u8; 4] = [10, 12, 14, 16];
-
-        let mut buf = [front_left, front_right, back_left].concat();
-        buf.append(&mut back_right.to_vec());
+        // parse_f32_wheels reads exactly 16 bytes (4 f32s); one byte short
+        // must be rejected rather than silently truncated/panicking.
+        let buf = vec![0u8; 15];
 
         let res = parse_f32_wheels(&buf);
         assert!(res.is_err(), "Error boundary should be caught");
