@@ -34,8 +34,9 @@ pub struct Client {
 impl Client {
     /// creates a new Assetto Corsa UDP Client
     ///
-    /// * `remote_addr`:  the addr the ACServer is running on
-    /// * `device`:  the device this client is running on
+    /// * `remote_addr`:  the addr the ACServer is running on.
+    ///   Per AC documentation, the connection port number is 9996
+    /// * `device`:  the device this client is running on.
     pub fn new<A>(remote_addr: A, device: Device) -> anyhow::Result<Self>
     where
         A: ToSocketAddrs,
