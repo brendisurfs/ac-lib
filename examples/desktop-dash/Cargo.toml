@@ -1,0 +1,12 @@
+[package]
+name = "desktop-dash"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+freya = {version =  "0.4.0", features = ["radio"] }
+ac_lib = { path = "../.." }
+crossbeam = "0.8.4"
+futures-lite = "2.6.1"
+futures-channel = "0.3.33"
