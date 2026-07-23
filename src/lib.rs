@@ -1,7 +1,7 @@
 //! reference for data: https://docs.google.com/document/d/1KfkZiIluXZ6mMhLWfDX1qAGbvhGRC3ZUzjVIt5FQpp4/pub
 //! also referrence: https://github.com/rickwest/ac-remote-telemetry-client/blob/master/src/parsers/RTCarInfoParser.js
 
-mod parser;
+pub mod parser;
 
 use std::{
     io,
@@ -64,6 +64,10 @@ impl Client {
         Ok(Self { socket, device })
     }
 
+    pub fn send_handshake(&self) -> io::Result<usize> {
+        self.send_message(Operation::Handshake)
+    }
+
     /// sends a message to the udp server.
     ///
     /// * `operation`: kind of op we want the udp server to update on.
@@ -73,10 +77,10 @@ impl Client {
     }
 
     /// receives the next event on the server.
-    pub fn recv_raw_event_buffer(&self) -> anyhow::Result<(Event, [u8; 1024])> {
+    pub fn recv_raw_event_buffer(&self) -> anyhow::Result<(Event, [u8; 512])> {
         // NOTE: The buffer we write to must be large enough, or else we may not get enough data.
         // TODO: calculate appropriate max size buffer to read into.
-        let mut buf = [0u8; 1024];
+        let mut buf = [0u8; 512];
         let read_size = self.socket.recv(&mut buf)?;
 
         let ac_event = match read_size {

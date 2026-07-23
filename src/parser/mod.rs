@@ -11,7 +11,7 @@ pub(crate) const HANDSHAKE_RES_LEN: usize = 408;
 
 /// module errors
 #[derive(Error, Debug)]
-enum ParserError {
+pub enum ParserError {
     /// If a parsing function receives an incorrect buffer sizing
     #[error("Received incorrect size of buffer: {0}")]
     IncorrectBufferSize(usize),
@@ -35,8 +35,12 @@ enum ParserError {
     CharConversionFailed(String),
 }
 
+pub trait Eventable {
+    const EVENT_NAME: String;
+}
+
 /// Trait that maps to converting into an event struct
-trait IntoEvent {
+pub trait IntoEvent {
     fn from_bytes(buf: &[u8]) -> Result<Self, ParserError>
     where
         Self: Sized;
