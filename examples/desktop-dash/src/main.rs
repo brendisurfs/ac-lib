@@ -1,36 +1,39 @@
+mod gear_indicator;
+mod lap_bar;
 use std::sync::Arc;
 
+use ac_lib::parser::ACEvent;
+use ac_lib::parser::RTCarInfo;
+use ac_lib::parser::RTLapInfo;
 use freya::{prelude::*, radio::*};
 
 use ac_lib::Client;
 use ac_lib::parser::Device;
 
-#[derive(Default, Debug)]
+use crate::gear_indicator::GearIndicator;
+use crate::lap_bar::LapBar;
+
+#[derive(Default, Debug, PartialEq)]
 enum AppStatus {
-    #[default]
     Running,
     Crashed,
+    #[default]
     Connecting,
     FailedToConnect,
 }
 
+#[derive(Default)]
 pub struct Data {
-    stream_data: [u8; 512],
+    lap_info: Option<RTLapInfo>,
+    car_info: Option<RTCarInfo>,
     status: AppStatus,
-}
-impl Default for Data {
-    fn default() -> Self {
-        Self {
-            stream_data: [0; 512],
-            status: AppStatus::Connecting,
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum DataChannel {
     AppState,
-    Data,
+    CarInfo,
+    LapInfo,
 }
 
 impl RadioChannel<Data> for DataChannel {}
@@ -39,7 +42,7 @@ fn main() {
     let mut radio_station = RadioStation::create_global(Data::default());
 
     // A stand in for checking that we receive data.
-    let data_queue = Arc::new(crossbeam::queue::ArrayQueue::<[u8; 512]>::new(2));
+    let data_queue = Arc::new(crossbeam::queue::ArrayQueue::<ACEvent>::new(2));
     let (mut status_tx, mut status_rx) = futures_channel::mpsc::channel::<AppStatus>(1);
 
     // queue that goes to the spawned thread
@@ -48,29 +51,58 @@ fn main() {
     let launch_config = LaunchConfig::new()
         .with_future(move |_| async move {
             std::thread::spawn(move || {
-                let Ok(client) = Client::new("0.0.0.0:0", Device::IPhone) else {
+                let Ok(client) = Client::new("0.0.0.0:0", Device::IPhone)
+                    .inspect_err(|why| eprintln!("{why:?}"))
+                else {
                     let _ = status_tx
                         .try_send(AppStatus::FailedToConnect)
                         .inspect_err(|why| eprintln!("{why:?}"));
                     return;
                 };
 
-                client.send_handshake().expect("failed to send handshake");
+                if let Err(why) = client.send_handshake() {
+                    eprintln!("{why:?}");
+
+                    let _ = status_tx
+                        .try_send(AppStatus::FailedToConnect)
+                        .inspect_err(|why| eprintln!("{why:?}"));
+                }
+                if let Err(why) = status_tx.try_send(AppStatus::Running) {
+                    eprintln!("Unable to set Running status: {why:?}");
+
+                    let _ = status_tx
+                        .try_send(AppStatus::Crashed)
+                        .inspect_err(|why| eprintln!("failed to send app status: {why:?}"));
+                    return;
+                }
 
                 while let Ok(msg) = client.recv_raw_event_buffer() {
-                    let _ = thread_queue.force_push(msg.1);
+                    let _ = thread_queue.force_push(msg);
                 }
             });
 
             // LOOP: bounded by receiving a crashed event.
 
             loop {
-                if let Ok(AppStatus::Crashed) = status_rx.recv().await {
-                    radio_station.write_channel(DataChannel::AppState).status = AppStatus::Crashed;
+                if let Ok(status) = status_rx.recv().await
+                    && (status == AppStatus::FailedToConnect || status == AppStatus::Crashed)
+                {
+                    radio_station.write_channel(DataChannel::AppState).status = status;
                     return;
                 }
+
                 if let Some(msg) = data_queue.pop() {
-                    radio_station.write_channel(DataChannel::Data).stream_data = msg;
+                    match msg {
+                        ACEvent::CarInfo(car_info) => {
+                            radio_station.write_channel(DataChannel::CarInfo).car_info =
+                                Some(*car_info);
+                        }
+                        ACEvent::LapInfo(lap_info) => {
+                            radio_station.write_channel(DataChannel::LapInfo).lap_info =
+                                Some(*lap_info);
+                        }
+                        _ => continue,
+                    }
                 }
             }
         })
@@ -86,37 +118,24 @@ impl App for MyApp {
     fn render(&self) -> impl IntoElement {
         use_share_radio(move || self.radio_station);
 
-        let radio = use_radio(DataChannel::AppState);
-
         rect()
             .expanded()
             .center()
             .spacing(6.0)
-            .child(format!("App Status: {:?}", radio.read().status))
+            .child(LapBar)
+            .child(AppStatusComponent)
+            .child(GearIndicator)
     }
 }
 
 #[derive(PartialEq)]
-struct GearIndicator(i32);
+struct AppStatusComponent;
 
-impl Component for GearIndicator {
+impl Component for AppStatusComponent {
     fn render(&self) -> impl IntoElement {
-        rect().border(None)
-    }
-}
-
-#[derive(PartialEq)]
-struct CoolComponent(i32);
-impl Component for CoolComponent {
-    fn render(&self) -> impl IntoElement {
-        let mut state = use_state(|| self.0);
-
-        let increase = move |_| {
-            *state.write() += 1;
-        };
-
-        Button::new()
-            .on_press(increase)
-            .child(format!("Value: {}", state.read()))
+        let app_state_radio = use_radio(DataChannel::AppState);
+        rect()
+            .position(Position::new_global().top(0.0))
+            .child(label().text(format!("{:?}", app_state_radio.read().status)))
     }
 }

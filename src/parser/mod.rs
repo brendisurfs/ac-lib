@@ -67,7 +67,7 @@ pub enum Operation {
 }
 
 #[derive(Debug)]
-pub struct HandshakeResponse {
+pub struct HSResponse {
     pub car_name: String,
     pub driver_name: String,
     pub identifier: i32,
@@ -76,8 +76,8 @@ pub struct HandshakeResponse {
     pub track_config: String,
 }
 
-impl IntoEvent for HandshakeResponse {
-    fn from_bytes(buf: &[u8]) -> Result<HandshakeResponse, ParserError> {
+impl IntoEvent for HSResponse {
+    fn from_bytes(buf: &[u8]) -> Result<HSResponse, ParserError> {
         let mut cursor = ByteCursor::new(buf);
 
         let car_name = parse_utf8_chars(cursor.take(100));
@@ -89,7 +89,7 @@ impl IntoEvent for HandshakeResponse {
         let track_name = parse_to_utf16_chars(cursor.take(100));
         let track_config = parse_to_utf16_chars(cursor.take(100));
 
-        Ok(HandshakeResponse {
+        Ok(HSResponse {
             car_name,
             driver_name,
             identifier,
@@ -101,7 +101,7 @@ impl IntoEvent for HandshakeResponse {
 }
 
 #[derive(Debug)]
-pub struct CarInfo {
+pub struct RTCarInfo {
     pub identifier: char,
     pub size: i32,
     pub speed_kmh: f32,
@@ -146,7 +146,7 @@ pub struct CarInfo {
     pub car_coordinates: [f32; 3],
 }
 
-impl IntoEvent for CarInfo {
+impl IntoEvent for RTCarInfo {
     fn from_bytes(buf: &[u8]) -> Result<Self, ParserError> {
         if buf.len() != CAR_INFO_LEN {
             return Err(ParserError::IncorrectBufferSize(buf.len()));
@@ -208,7 +208,7 @@ impl IntoEvent for CarInfo {
         let car_slope = c.f32()?;
         let car_coordinates = c.xyz()?;
 
-        Ok(CarInfo {
+        Ok(RTCarInfo {
             identifier,
             size,
             speed_kmh,
@@ -256,14 +256,14 @@ impl IntoEvent for CarInfo {
 }
 
 #[derive(Debug)]
-pub struct LapInfo {
+pub struct RTLapInfo {
     pub car_id_num: i32,
     pub lap: i32,
     pub time: i32,
     pub car_name: String,
     pub driver_name: String,
 }
-impl IntoEvent for LapInfo {
+impl IntoEvent for RTLapInfo {
     fn from_bytes(buf: &[u8]) -> Result<Self, ParserError> {
         if buf.len() != LAP_INFO_LEN {
             return Err(ParserError::IncorrectBufferSize(buf.len()));
@@ -277,7 +277,7 @@ impl IntoEvent for LapInfo {
         let car_name = parse_to_utf16_chars(c.take(100));
         let time = c.i32()?;
 
-        Ok(LapInfo {
+        Ok(RTLapInfo {
             car_id_num,
             time,
             lap,
@@ -290,10 +290,10 @@ impl IntoEvent for LapInfo {
 // the kind of message we can receive from the UDP server
 // reference for parsing: https://docs.google.com/spreadsheets/d/1PhWgG1B7cv38OEummTZOOItrE-yYRBpMI2nV92BfDFU/pubhtml?gid=0&single=true
 #[derive(Debug)]
-pub enum Event {
-    HandshakeResponse,
-    CarInfo,
-    LapInfo,
+pub enum ACEvent {
+    HandshakeResponse(Box<HSResponse>),
+    CarInfo(Box<RTCarInfo>),
+    LapInfo(Box<RTLapInfo>),
 }
 
 /// A central data structure that is used to communicate event subscriptions with the AC server.
@@ -336,7 +336,7 @@ fn parse_to_utf16_chars(buf: &[u8]) -> String {
 #[cfg(test)]
 mod parser_tests {
 
-    use crate::parser::{CAR_INFO_LEN, CarInfo, IntoEvent, LAP_INFO_LEN, LapInfo};
+    use crate::parser::{CAR_INFO_LEN, IntoEvent, LAP_INFO_LEN, RTCarInfo, RTLapInfo};
 
     fn put_f32(buf: &mut [u8], offset: usize, val: f32) {
         buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
@@ -408,7 +408,7 @@ mod parser_tests {
     #[test]
     fn car_info_fields_land_on_documented_offsets() {
         let buf = marker_car_info_buf();
-        let info = CarInfo::from_bytes(&buf).expect("328-byte buffer should parse");
+        let info = RTCarInfo::from_bytes(&buf).expect("328-byte buffer should parse");
 
         assert_eq!(info.size, 4);
         assert_eq!(info.speed_kmh, 8.0);
@@ -450,7 +450,7 @@ mod parser_tests {
     #[test]
     fn car_info_rejects_wrong_size_buffer() {
         let buf = vec![0u8; CAR_INFO_LEN - 1];
-        assert!(CarInfo::from_bytes(&buf).is_err());
+        assert!(RTCarInfo::from_bytes(&buf).is_err());
     }
 
     // Builds a 212-byte LapInfo buffer with distinct marker values so a wrong
@@ -472,7 +472,7 @@ mod parser_tests {
     #[test]
     fn lap_info_fields_land_on_documented_offsets() {
         let buf = marker_lap_info_buf();
-        let info = LapInfo::from_bytes(&buf).expect("212-byte buffer should parse");
+        let info = RTLapInfo::from_bytes(&buf).expect("212-byte buffer should parse");
 
         assert_eq!(info.car_id_num, 7);
         assert_eq!(info.lap, 3);
@@ -484,6 +484,6 @@ mod parser_tests {
     #[test]
     fn lap_info_rejects_wrong_size_buffer() {
         let buf = vec![0u8; LAP_INFO_LEN - 1];
-        assert!(LapInfo::from_bytes(&buf).is_err());
+        assert!(RTLapInfo::from_bytes(&buf).is_err());
     }
 }
